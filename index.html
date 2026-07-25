@@ -159,6 +159,12 @@ canvas.sigpad{
 .pt-card-body table{margin-bottom:16px;}
 .pt-card-body th{font-size:11.5px;}
 .pt-sig-box{display:flex;justify-content:space-between;align-items:flex-end;gap:20px;margin-top:10px;}
+.terms-box{
+  background:#faf9fd;border:1.5px solid var(--line);border-radius:10px;
+  padding:14px 16px;margin-top:6px;
+}
+.terms-box .terms-title{font-weight:800;color:var(--purple-dark);font-size:13px;margin-bottom:6px;}
+.terms-box .terms-text{font-size:12.5px;color:var(--ink);line-height:1.9;white-space:pre-line;}
 .pt-sig-box .sig-img{border-bottom:1.5px solid var(--ink);height:70px;display:flex;align-items:flex-end;justify-content:center;min-width:220px;}
 .pt-sig-box .sig-img img{max-height:65px;}
 .pt-sig-label{font-size:11.5px;color:var(--muted);margin-top:4px;text-align:center;}
@@ -212,6 +218,7 @@ const I18N = {
     patientCard:'كارت العلاج الطبيعي', address:'العنوان', phone:'الهاتف',
     editApiUrl:'تعديل رابط الشيت', loading:'جارِ التحميل...', connError:'تعذر الاتصال بالخادم، تأكد من رابط الشيت',
     optional:'اختياري', signHere:'وقّع هنا', notes:'ملاحظات',
+    termsTitle:'الشروط والأحكام:', termsText:'أتعهد بالالتزام بحضور جميع جلسات العلاج الطبيعي خلال فترة الموافقة، والالتزام بالمواعيد المحددة.\nوأقر بأنه في حال التغيب عن أي جلسة بعد تأكيد الموعد، فلا يحق لي المطالبة بتعويضها أو إعادة جدولتها.',
     archiveTitle:'أرشفة المرضى', archiveDesc:'انقل مرضى فترة زمنية معينة (حسب تاريخ التسجيل) إلى ملف جوجل شيت منفصل، وهيتم حذفهم من القائمة الأساسية لتخفيف الشيت.',
     archiveBtn:'أرشفة الفترة المحددة', archiveConfirm:'سيتم نقل جميع المرضى في هذه الفترة لملف منفصل وحذفهم من القائمة الأساسية. هذا الإجراء لا يمكن التراجع عنه من داخل النظام. هل أنت متأكد؟',
     archiveSuccess:'تم إنشاء الأرشيف بنجاح', archiveList:'الأرشيفات السابقة', noArchives:'لا توجد أرشيفات سابقة بعد',
@@ -252,6 +259,7 @@ const I18N = {
     patientCard:'Physiotherapy Treatment Card', address:'Address', phone:'Phone',
     editApiUrl:'Edit sheet URL', loading:'Loading...', connError:'Could not connect to server, check the sheet URL',
     optional:'optional', signHere:'Sign here', notes:'Notes',
+    termsTitle:'Terms & Conditions:', termsText:'I pledge to commit to attending all physiotherapy sessions during the approval period, and to adhere to the scheduled appointment times.\nI acknowledge that if I miss any session after the appointment has been confirmed, I am not entitled to claim compensation or rescheduling for it.',
     archiveTitle:'Archive Patients', archiveDesc:'Move patients registered within a date range to a separate Google Sheet file, then remove them from the main list to keep the sheet light.',
     archiveBtn:'Archive Selected Period', archiveConfirm:'All patients in this period will be moved to a separate file and removed from the main list. This cannot be undone from within the system. Are you sure?',
     archiveSuccess:'Archive created successfully', archiveList:'Previous Archives', noArchives:'No previous archives yet',
@@ -493,7 +501,11 @@ function renderNewPatientTab(){
     <div style="margin-top:10px;">${sessionsHtml}</div>
 
     <h3 style="margin-top:20px;">${esc(L.signature)}</h3>
-    <canvas id="sigPad" class="sigpad"></canvas>
+    <div class="terms-box">
+      <div class="terms-title">${esc(L.termsTitle)}</div>
+      <div class="terms-text">${esc(L.termsText)}</div>
+    </div>
+    <canvas id="sigPad" class="sigpad" style="margin-top:10px;"></canvas>
     <div class="row" style="margin-top:8px;">
       <button class="btn btn-outline btn-sm" id="btnClearSig">${esc(L.clearSig)}</button>
       <span class="muted">${esc(L.signHere)}</span>
@@ -800,6 +812,10 @@ function renderPatientCardSection(p, withEditSessions){
           <thead><tr><th>${esc(L.session)}</th><th>${esc(L.date)} / ${esc(L.time)}</th><th>${esc(L.status)}</th></tr></thead>
           <tbody>${sessionsRows}</tbody>
         </table>
+        <div class="terms-box">
+          <div class="terms-title">${esc(L.termsTitle)}</div>
+          <div class="terms-text">${esc(L.termsText)}</div>
+        </div>
         <div class="pt-sig-box">
           <div>
             <div class="sig-img">${p.SignatureDataURL ? `<img src="${p.SignatureDataURL}">` : ''}</div>
@@ -1319,6 +1335,27 @@ function truncateToWidth(ctx, text, maxWidth){
   }
   return text.slice(0, lo) + '…';
 }
+// يقسّم نص (ممكن يحتوي على \n لفقرات متعددة) لأسطر تناسب عرض معيّن، بالاعتماد على measureText الأصلية
+// فبيحترم تشكيل الحروف العربية صح لأنه بيقيس كلمات كاملة مش حروف منفردة
+function wrapTextToLines(ctx, text, maxWidth){
+  const paragraphs = String(text == null ? '' : text).split('\n');
+  const lines = [];
+  paragraphs.forEach(para => {
+    const words = para.split(' ');
+    let current = '';
+    words.forEach(word => {
+      const test = current ? current + ' ' + word : word;
+      if(ctx.measureText(test).width <= maxWidth || !current){
+        current = test;
+      } else {
+        lines.push(current);
+        current = word;
+      }
+    });
+    if(current) lines.push(current);
+  });
+  return lines;
+}
 function formatSessionValue(val){
   // يستخدم نفس منطق تفسير الجلسة (يستبعد لاحقة |done الخاصة بالتأكيد اليدوي) الموجود في parseSessionCell
   return parseSessionCell(val).display;
@@ -1339,10 +1376,26 @@ async function renderCardToCanvas(patient){
   const TABLE_H = TABLE_HEADER_H + 12 * TABLE_ROW_H;
   const SIG_H = 118;
   const FOOTER_H = 50;
+  const FONT = "'Cairo','Tahoma',sans-serif";
+
+  try{ if(document.fonts && document.fonts.ready) await document.fonts.ready; }catch(e){}
+
+  // نقيس نص الشروط والأحكام مسبقًا (بخط مؤقت) عشان نحدد ارتفاع صندوقه قبل ما نجهّز حجم الكانفاس النهائي
+  const measureCanvas = document.createElement('canvas');
+  const mctx = measureCanvas.getContext('2d');
+  mctx.font = "400 12px " + FONT;
+  const TERMS_PAD = 14;
+  const TERMS_TITLE_H = 20;
+  const TERMS_LINE_H = 19;
+  const termsMaxWidth = W - PAD*2 - TERMS_PAD*2;
+  const termsLines = wrapTextToLines(mctx, L.termsText, termsMaxWidth);
+  const TERMS_H = TERMS_PAD*2 + TERMS_TITLE_H + termsLines.length * TERMS_LINE_H;
+
   const bodyTop = HEADER_H + PAD;
   const infoGridTop = bodyTop;
   const tableTop = infoGridTop + INFO_GRID_H + 18;
-  const sigTop = tableTop + TABLE_H + 18;
+  const termsTop = tableTop + TABLE_H + 18;
+  const sigTop = termsTop + TERMS_H + 18;
   const H = sigTop + SIG_H + PAD + FOOTER_H;
 
   const canvas = document.createElement('canvas');
@@ -1358,9 +1411,6 @@ async function renderCardToCanvas(patient){
     ink: '#231b3a', muted: '#736c8a', line: '#e6e2f2', footBg: '#f3f0fb',
     success: '#1e8a5f', pending: '#b3860b', empty: '#bbbbbb'
   };
-  const FONT = "'Cairo','Tahoma',sans-serif";
-
-  try{ if(document.fonts && document.fonts.ready) await document.fonts.ready; }catch(e){}
 
   // ---- background ----
   ctx.fillStyle = '#ffffff';
@@ -1492,6 +1542,24 @@ async function renderCardToCanvas(patient){
       }
     });
   }
+
+  // ---- terms & conditions ----
+  ctx.fillStyle = '#faf9fd';
+  ctx.strokeStyle = COL.line;
+  ctx.lineWidth = 1.5;
+  roundRectPath(ctx, PAD, termsTop, W - PAD*2, TERMS_H, 10);
+  ctx.fill();
+  ctx.stroke();
+  ctx.textAlign = isAr ? 'right' : 'left';
+  const termsTextX = isAr ? (W - PAD - TERMS_PAD) : (PAD + TERMS_PAD);
+  ctx.fillStyle = COL.purpleDark;
+  ctx.font = "800 13px " + FONT;
+  ctx.fillText(L.termsTitle, termsTextX, termsTop + TERMS_PAD + 12);
+  ctx.fillStyle = COL.ink;
+  ctx.font = "400 12px " + FONT;
+  termsLines.forEach((line, i) => {
+    ctx.fillText(line, termsTextX, termsTop + TERMS_PAD + TERMS_TITLE_H + 12 + i * TERMS_LINE_H);
+  });
 
   // ---- signatures: patient + treating doctor ----
   const boxW = 230;
