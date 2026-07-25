@@ -215,6 +215,8 @@ const I18N = {
     archiveBtn:'أرشفة الفترة المحددة', archiveConfirm:'سيتم نقل جميع المرضى في هذه الفترة لملف منفصل وحذفهم من القائمة الأساسية. هذا الإجراء لا يمكن التراجع عنه من داخل النظام. هل أنت متأكد؟',
     archiveSuccess:'تم إنشاء الأرشيف بنجاح', archiveList:'الأرشيفات السابقة', noArchives:'لا توجد أرشيفات سابقة بعد',
     openFile:'فتح الملف', recordCount:'عدد السجلات', archivedAt:'تاريخ الأرشفة', archivedBy:'بواسطة', dateRange:'الفترة',
+    editBtn:'تعديل بيانات المريض', editPatientTitle:'تعديل بيانات المريض', saveChanges:'حفظ التعديلات', updatedOk:'تم تحديث بيانات المريض بنجاح',
+    confirmManually:'تأكيد يدوي', confirmManuallyHint:'الحالة تتحول لمؤكدة تلقائيًا بعد مرور موعد الجلسة، أو تقدر تفعّل "تأكيد يدوي" لتظهر مؤكدة فورًا بغض النظر عن التاريخ.',
     back:'رجوع', close:'إغلاق'
   },
   en: {
@@ -253,6 +255,8 @@ const I18N = {
     archiveBtn:'Archive Selected Period', archiveConfirm:'All patients in this period will be moved to a separate file and removed from the main list. This cannot be undone from within the system. Are you sure?',
     archiveSuccess:'Archive created successfully', archiveList:'Previous Archives', noArchives:'No previous archives yet',
     openFile:'Open File', recordCount:'Record Count', archivedAt:'Archived At', archivedBy:'By', dateRange:'Period',
+    editBtn:'Edit Patient', editPatientTitle:'Edit Patient Data', saveChanges:'Save Changes', updatedOk:'Patient data updated successfully',
+    confirmManually:'Confirm manually', confirmManuallyHint:'Status turns to confirmed automatically once the session date has passed, or you can enable "Confirm manually" to mark it confirmed right away regardless of the date.',
     back:'Back', close:'Close'
   }
 };
@@ -286,7 +290,8 @@ const STATE = {
   pendingUsers: [],
   allUsers: [],
   archives: [],
-  sigDrawn: false
+  sigDrawn: false,
+  editMode: false
 };
 function t(){ return I18N[STATE.lang]; }
 function cfg(){ return STATE.config || FALLBACK_CONFIG; }
@@ -493,7 +498,7 @@ function renderNewPatientTab(){
 
     <button class="btn btn-primary" id="btnSavePatient" style="margin-top:18px;">${STATE.loading ? spinner() : esc(L.saveSign)}</button>
   </div>
-  ${STATE.currentPatient ? renderPatientCardSection(STATE.currentPatient) : ''}
+  ${STATE.currentPatient ? renderCurrentPatientSection() : ''}
   `;
 }
 
@@ -526,7 +531,7 @@ function renderSearchTab(){
     </div>
   </div>
   <div class="card">${resultsHtml}</div>
-  ${STATE.currentPatient ? renderPatientCardSection(STATE.currentPatient, true) : ''}
+  ${STATE.currentPatient ? renderCurrentPatientSection() : ''}
   `;
 }
 
@@ -564,7 +569,7 @@ function renderReportsTab(){
       </tr>`).join('')}
     </tbody></table>`}
   </div>
-  ${STATE.currentPatient ? renderPatientCardSection(STATE.currentPatient, true) : ''}
+  ${STATE.currentPatient ? renderCurrentPatientSection() : ''}
   `;
 }
 
@@ -660,6 +665,78 @@ function renderChangePwTab(){
 }
 
 /* ---- Patient card (printable/exportable) ---- */
+// جلسة قد تُخزَّن كـ "YYYY-MM-DD HH:MM" أو مع لاحقة "|done" لو تم تأكيدها يدويًا بغض النظر عن التاريخ
+function parseSessionCell(raw){
+  raw = raw || '';
+  const parts = String(raw).split('|');
+  return { display: parts[0] || '', manualDone: parts[1] === 'done' };
+}
+function sessionIsDone(raw){
+  const parsed = parseSessionCell(raw);
+  if(!parsed.display) return false;
+  if(parsed.manualDone) return true;
+  const d = new Date(parsed.display.replace(' ', 'T'));
+  if(isNaN(d)) return false;
+  return d < new Date();
+}
+
+function renderCurrentPatientSection(){
+  if(!STATE.currentPatient) return '';
+  return STATE.editMode ? renderEditPatientForm(STATE.currentPatient) : renderPatientCardSection(STATE.currentPatient, true);
+}
+
+function renderEditPatientForm(p){
+  const L = t(); const c = cfg();
+  const insurance = c.insuranceList || [];
+  let sessionsHtml = '';
+  for(let i=1;i<=12;i++){
+    const raw = p['Session'+i] || '';
+    const parsed = parseSessionCell(raw);
+    const dateVal = parsed.display ? parsed.display.split(' ')[0] : '';
+    const timeVal = parsed.display && parsed.display.split(' ')[1] ? parsed.display.split(' ')[1] : '';
+    sessionsHtml += `
+    <div class="session-row" style="grid-template-columns:36px 1fr 1fr auto;">
+      <div class="session-num">${i}</div>
+      <input type="date" id="editSessDate${i}" value="${esc(dateVal)}">
+      <input type="time" id="editSessTime${i}" value="${esc(timeVal)}">
+      <label style="display:flex;align-items:center;gap:5px;font-size:11.5px;font-weight:600;white-space:nowrap;color:var(--purple-dark);">
+        <input type="checkbox" id="editSessDone${i}" ${parsed.manualDone ? 'checked' : ''} style="width:auto;margin:0;">
+        ${esc(L.confirmManually)}
+      </label>
+    </div>`;
+  }
+  return `
+  <div class="card">
+    <div class="row" style="justify-content:space-between;margin-bottom:6px;">
+      <h2 style="margin:0;">${esc(L.editPatientTitle)}</h2>
+      <button class="btn btn-outline btn-sm" id="btnCancelEdit">${esc(L.close)}</button>
+    </div>
+    <div class="grid grid-2" style="margin-top:14px;">
+      <div class="field"><label>${esc(L.patientName)} *</label><input type="text" id="editName" value="${esc(p.PatientName)}"></div>
+      <div class="field"><label>${esc(L.fileNumber)} *</label><input type="text" id="editFile" value="${esc(p.FileNumber)}"></div>
+      <div class="field"><label>${esc(L.insuranceCompany)}</label>
+        <select id="editInsurance">
+          <option value="">${esc(L.selectInsurance)}</option>
+          ${insurance.map(x=>`<option value="${esc(x)}" ${p.InsuranceCompany===x?'selected':''}>${esc(x)}</option>`).join('')}
+        </select>
+      </div>
+      <div class="field"><label>${esc(L.nationalId)}</label><input type="text" id="editNationalId" value="${esc(p.NationalID)}"></div>
+      <div class="field"><label>${esc(L.mobile)}</label><input type="tel" id="editMobile" value="${esc(p.Mobile)}"></div>
+      <div class="field"><label>${esc(L.doctor)}</label><input type="text" id="editDoctor" value="${esc(p.Doctor)}"></div>
+      <div class="field"><label>${esc(L.nurseName)}</label><input type="text" id="editNurse" value="${esc(p.NurseName)}"></div>
+    </div>
+    <div class="field" style="margin-top:14px;"><label>${esc(L.treatment)}</label><textarea id="editTreatment">${esc(p.Treatment||'')}</textarea></div>
+
+    <h3 style="margin-top:20px;">${esc(L.sessions)}</h3>
+    <p class="muted" style="margin-top:2px;">${esc(L.confirmManuallyHint)}</p>
+    <div style="margin-top:10px;">${sessionsHtml}</div>
+
+    <div class="field" style="margin-top:14px;"><label>${esc(L.notes)} (${esc(L.optional)})</label><textarea id="editNotes">${esc(p.Notes||'')}</textarea></div>
+
+    <button class="btn btn-primary" id="btnSaveEdit" style="margin-top:18px;">${STATE.loading ? spinner() : esc(L.saveChanges)}</button>
+  </div>`;
+}
+
 function renderPatientCardSection(p, withEditSessions){
   const L = t(); const c = cfg();
   const clinicName = STATE.lang === 'ar' ? c.clinicNameAr : c.clinicNameEn;
@@ -667,13 +744,13 @@ function renderPatientCardSection(p, withEditSessions){
 
   let sessionsRows = '';
   for(let i=1;i<=12;i++){
-    const val = p['Session'+i] || '';
+    const raw = p['Session'+i] || '';
+    const parsed = parseSessionCell(raw);
     let statusHtml = `<span class="status-empty">${esc(L.notScheduled)}</span>`;
-    if(val){
-      const isPast = /^\d{4}-\d{2}-\d{2}/.test(val) ? (new Date(val.replace(' ','T')) < new Date()) : false;
-      statusHtml = isPast ? `<span class="status-done">✓</span>` : `<span class="status-pending">•</span>`;
+    if(parsed.display){
+      statusHtml = sessionIsDone(raw) ? `<span class="status-done">✓</span>` : `<span class="status-pending">•</span>`;
     }
-    sessionsRows += `<tr><td>${i}</td><td>${esc(val || '-')}</td><td>${statusHtml}</td></tr>`;
+    sessionsRows += `<tr><td>${i}</td><td>${esc(parsed.display || '-')}</td><td>${statusHtml}</td></tr>`;
   }
 
   return `
@@ -681,6 +758,7 @@ function renderPatientCardSection(p, withEditSessions){
     <div class="row" style="justify-content:space-between;margin-bottom:14px;">
       <h3 style="margin:0;">${esc(L.patientCard)}</h3>
       <div class="row">
+        <button class="btn btn-outline btn-sm" id="btnEditPatient">${esc(L.editBtn)}</button>
         <button class="btn btn-gold btn-sm" id="btnDownloadCard">${esc(L.downloadCard)}</button>
         <button class="btn btn-outline btn-sm" id="btnPrintCard">${esc(L.printCard)}</button>
       </div>
@@ -761,7 +839,7 @@ function bindEvents(){
 
   // Tabs
   document.querySelectorAll('[data-tab]').forEach(el => {
-    el.onclick = () => { STATE.tab = el.getAttribute('data-tab'); STATE.currentPatient = null; clearMsg(); onTabOpen(STATE.tab); };
+    el.onclick = () => { STATE.tab = el.getAttribute('data-tab'); STATE.currentPatient = null; STATE.editMode = false; clearMsg(); onTabOpen(STATE.tab); };
   });
 
   // New patient
@@ -788,6 +866,9 @@ function bindEvents(){
   // Card actions
   if($('btnDownloadCard')) $('btnDownloadCard').onclick = onDownloadCard;
   if($('btnPrintCard')) $('btnPrintCard').onclick = onPrintCard;
+  if($('btnEditPatient')) $('btnEditPatient').onclick = () => { STATE.editMode = true; clearMsg(); render(); };
+  if($('btnCancelEdit')) $('btnCancelEdit').onclick = () => { STATE.editMode = false; clearMsg(); render(); };
+  if($('btnSaveEdit')) $('btnSaveEdit').onclick = onSaveEditPatient;
 
   // Change password
   if($('btnChangePw')) $('btnChangePw').onclick = onChangePassword;
@@ -1006,6 +1087,56 @@ async function onSavePatient(){
       full.Session5=sessions[4]; full.Session6=sessions[5]; full.Session7=sessions[6]; full.Session8=sessions[7];
       full.Session9=sessions[8]; full.Session10=sessions[9]; full.Session11=sessions[10]; full.Session12=sessions[11];
       STATE.currentPatient = full;
+      STATE.editMode = false;
+    } else {
+      setMsg('error', res.message);
+    }
+  } catch(err){ STATE.loading = false; setMsg('error', t().connError); }
+  render();
+}
+
+async function onSaveEditPatient(){
+  const L = t();
+  if(!STATE.currentPatient || !STATE.currentPatient.PatientID){ setMsg('error', t().connError); render(); return; }
+  const name = document.getElementById('editName').value.trim();
+  const file = document.getElementById('editFile').value.trim();
+  if(!name || !file){ setMsg('error', L.requiredFields); render(); return; }
+
+  const sessions = [];
+  for(let i=1;i<=12;i++){
+    const d = document.getElementById('editSessDate'+i).value;
+    const tm = document.getElementById('editSessTime'+i).value;
+    const done = document.getElementById('editSessDone'+i).checked;
+    let val = d ? (d + (tm ? ' ' + tm : '')) : '';
+    if(val && done) val += '|done';
+    sessions.push(val);
+  }
+
+  const patient = {
+    PatientName: name,
+    FileNumber: file,
+    InsuranceCompany: document.getElementById('editInsurance').value,
+    NationalID: document.getElementById('editNationalId').value.trim(),
+    Mobile: document.getElementById('editMobile').value.trim(),
+    Doctor: document.getElementById('editDoctor').value.trim(),
+    Treatment: document.getElementById('editTreatment').value.trim(),
+    NurseName: document.getElementById('editNurse').value.trim(),
+    Notes: document.getElementById('editNotes').value.trim(),
+    Sessions: sessions
+  };
+
+  STATE.loading = true; clearMsg(); render();
+  try{
+    const res = await api('updatePatient', {patientId: STATE.currentPatient.PatientID, patient, updatedBy: STATE.user.username}, 'POST');
+    STATE.loading = false;
+    if(res.success){
+      const updated = Object.assign({}, STATE.currentPatient, patient);
+      for(let i=1;i<=12;i++){ updated['Session'+i] = sessions[i-1]; }
+      STATE.currentPatient = updated;
+      STATE.editMode = false;
+      setMsg('success', t().updatedOk);
+      // حدّث النتيجة المطابقة في قائمة نتائج البحث الحالية أيضاً لو موجودة
+      STATE.patients = STATE.patients.map(p => p.PatientID === updated.PatientID ? Object.assign({}, p, patient) : p);
     } else {
       setMsg('error', res.message);
     }
@@ -1095,7 +1226,7 @@ async function onViewPatient(patientId){
   try{
     const res = await api('getPatient', {patientId}, 'GET');
     STATE.loading = false;
-    if(res.success){ STATE.currentPatient = res.patient; clearMsg(); }
+    if(res.success){ STATE.currentPatient = res.patient; STATE.editMode = false; clearMsg(); }
     else setMsg('error', res.message);
   } catch(err){ STATE.loading = false; setMsg('error', t().connError); }
   render();
@@ -1134,15 +1265,8 @@ function truncateToWidth(ctx, text, maxWidth){
   return text.slice(0, lo) + '…';
 }
 function formatSessionValue(val){
-  if(!val) return '';
-  // "YYYY-MM-DD HH:MM" -> keep as-is; already human readable and LTR-safe inside RTL context
-  return String(val);
-}
-function isPastSession(val){
-  if(!val) return false;
-  const d = new Date(String(val).replace(' ', 'T'));
-  if(isNaN(d)) return false;
-  return d < new Date();
+  // يستخدم نفس منطق تفسير الجلسة (يستبعد لاحقة |done الخاصة بالتأكيد اليدوي) الموجود في parseSessionCell
+  return parseSessionCell(val).display;
 }
 
 async function renderCardToCanvas(patient){
@@ -1301,7 +1425,7 @@ async function renderCardToCanvas(patient){
           ctx.fillStyle = COL.empty;
           ctx.font = "400 11.5px " + FONT;
           ctx.fillText(truncateToWidth(ctx, L.notScheduled, col.w - 10), cx, textY);
-        } else if(isPastSession(rawVal)){
+        } else if(sessionIsDone(rawVal)){
           ctx.fillStyle = COL.success;
           ctx.font = "700 14px " + FONT;
           ctx.fillText('✓', cx, textY);
