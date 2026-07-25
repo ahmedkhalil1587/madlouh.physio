@@ -214,7 +214,7 @@ const I18N = {
     admin:'أدمن', user:'موظف', approved:'مفعّل', pending:'بانتظار الموافقة',
     newPassword:'كلمة المرور الجديدة', changePwBtn:'تحديث كلمة المرور', pwChanged:'تم تغيير كلمة المرور بنجاح',
     requiredFields:'برجاء تعبئة الحقول المطلوبة (اسم المريض ورقم الملف)',
-    selectInsurance:'اختر شركة التأمين', notScheduled:'غير محدد', updateSessions:'حفظ تعديل الجلسات',
+    selectInsurance:'اختر شركة التأمين', notScheduled:'غير محدد', updateSessions:'حفظ تعديل الجلسات', noSessionsBooked:'لا توجد جلسات محجوزة بعد',
     patientCard:'كارت العلاج الطبيعي', address:'العنوان', phone:'الهاتف',
     editApiUrl:'تعديل رابط الشيت', loading:'جارِ التحميل...', connError:'تعذر الاتصال بالخادم، تأكد من رابط الشيت',
     optional:'اختياري', signHere:'وقّع هنا', notes:'ملاحظات',
@@ -255,7 +255,7 @@ const I18N = {
     admin:'Admin', user:'Staff', approved:'Approved', pending:'Pending',
     newPassword:'New Password', changePwBtn:'Update Password', pwChanged:'Password changed successfully',
     requiredFields:'Please fill required fields (Patient Name & File Number)',
-    selectInsurance:'Select Insurance', notScheduled:'Not scheduled', updateSessions:'Save Session Updates',
+    selectInsurance:'Select Insurance', notScheduled:'Not scheduled', updateSessions:'Save Session Updates', noSessionsBooked:'No sessions booked yet',
     patientCard:'Physiotherapy Treatment Card', address:'Address', phone:'Phone',
     editApiUrl:'Edit sheet URL', loading:'Loading...', connError:'Could not connect to server, check the sheet URL',
     optional:'optional', signHere:'Sign here', notes:'Notes',
@@ -1373,7 +1373,12 @@ async function renderCardToCanvas(patient){
   const INFO_GRID_H = INFO_ROWS * ROW_H + 6;
   const TABLE_HEADER_H = 32;
   const TABLE_ROW_H = 30;
-  const TABLE_H = TABLE_HEADER_H + 12 * TABLE_ROW_H;
+  const bookedSessionNumbers = [];
+  for(let s = 1; s <= 12; s++){
+    if(parseSessionCell(patient['Session' + s]).display) bookedSessionNumbers.push(s);
+  }
+  const sessionRowCount = Math.max(bookedSessionNumbers.length, 1); // صف واحد على الأقل لعرض رسالة "لا توجد جلسات" لو مفيش حجوزات
+  const TABLE_H = TABLE_HEADER_H + sessionRowCount * TABLE_ROW_H;
   const SIG_H = 118;
   const FOOTER_H = 50;
   const FONT = "'Cairo','Tahoma',sans-serif";
@@ -1500,8 +1505,21 @@ async function renderCardToCanvas(patient){
   });
 
   // table rows
-  for(let s = 1; s <= 12; s++){
-    const rowY = tableTop + TABLE_HEADER_H + (s-1) * TABLE_ROW_H;
+  if(bookedSessionNumbers.length === 0){
+    const rowY = tableTop + TABLE_HEADER_H;
+    ctx.strokeStyle = COL.line;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(PAD, rowY + TABLE_ROW_H);
+    ctx.lineTo(W - PAD, rowY + TABLE_ROW_H);
+    ctx.stroke();
+    ctx.fillStyle = COL.empty;
+    ctx.font = "400 12px " + FONT;
+    ctx.textAlign = 'center';
+    ctx.fillText(L.noSessionsBooked, W/2, rowY + TABLE_ROW_H/2 + 4);
+  }
+  bookedSessionNumbers.forEach((s, idx) => {
+    const rowY = tableTop + TABLE_HEADER_H + idx * TABLE_ROW_H;
     // bottom border
     ctx.strokeStyle = COL.line;
     ctx.lineWidth = 1;
@@ -1541,7 +1559,7 @@ async function renderCardToCanvas(patient){
         }
       }
     });
-  }
+  });
 
   // ---- terms & conditions ----
   ctx.fillStyle = '#faf9fd';
