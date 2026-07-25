@@ -701,7 +701,7 @@ function renderEditPatientForm(p){
       <input type="date" id="editSessDate${i}" value="${esc(dateVal)}">
       <input type="time" id="editSessTime${i}" value="${esc(timeVal)}">
       <label style="display:flex;align-items:center;gap:5px;font-size:11.5px;font-weight:600;white-space:nowrap;color:var(--purple-dark);">
-        <input type="checkbox" id="editSessDone${i}" ${parsed.manualDone ? 'checked' : ''} style="width:auto;margin:0;">
+        <input type="checkbox" id="editSessDone${i}" ${(parsed.manualDone || parsed.display) ? 'checked' : ''} style="width:auto;margin:0;">
         ${esc(L.confirmManually)}
       </label>
     </div>`;
@@ -751,7 +751,7 @@ function renderPatientCardSection(p, withEditSessions){
     if(parsed.display){
       statusHtml = sessionIsDone(raw) ? `<span class="status-done">✓</span>` : `<span class="status-pending">•</span>`;
     }
-    sessionsRows += `<tr><td>${i}</td><td>${esc(parsed.display || '-')}</td><td>${statusHtml}</td></tr>`;
+    sessionsRows += `<tr data-has-date="${parsed.display ? '1' : '0'}"><td>${i}</td><td>${esc(parsed.display || '-')}</td><td>${statusHtml}</td></tr>`;
   }
 
   return `
@@ -1518,8 +1518,10 @@ async function onDownloadCard(){
 function onPrintCard(){
   const node = document.getElementById('ptCard');
   if(!node) return;
+  const clone = node.cloneNode(true);
+  clone.querySelectorAll('tr[data-has-date="0"]').forEach(tr => tr.remove());
   const w = window.open('', '_blank');
-  w.document.write('<html><head><title>Print</title>' + document.querySelector('style').outerHTML + '</head><body style="padding:20px;">' + node.outerHTML + '</body></html>');
+  w.document.write('<html><head><title>Print</title>' + document.querySelector('style').outerHTML + '</head><body style="padding:20px;">' + clone.outerHTML + '</body></html>');
   w.document.close();
   setTimeout(() => w.print(), 300);
 }
