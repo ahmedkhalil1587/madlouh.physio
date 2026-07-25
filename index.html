@@ -199,7 +199,7 @@ const I18N = {
     clearSig:'مسح التوقيع', saveSign:'تسجيل بيانات المريض وحفظ الكارت',
     saving:'جارِ الحفظ...', savedOk:'تم حفظ المريض بنجاح',
     downloadCard:'تحميل الكارت JPG', printCard:'طباعة الكارت',
-    searchPlaceholder:'ابحث بالاسم / رقم الملف / رقم الهوية / الجوال', search:'بحث',
+    searchPlaceholder:'ابحث بالاسم / رقم الملف / رقم الهوية / الجوال', search:'بحث', refreshList:'تحديث القائمة', lastUpdated:'آخر تحديث',
     noResults:'لا توجد نتائج', viewCard:'عرض الكارت', regDate:'تاريخ التسجيل',
     filterFrom:'من تاريخ', filterTo:'إلى تاريخ', filterInsurance:'شركة التأمين', applyFilter:'تطبيق الفلتر',
     exportExcel:'تصدير Excel', totalRecords:'إجمالي السجلات',
@@ -239,7 +239,7 @@ const I18N = {
     clearSig:'Clear Signature', saveSign:'Register Patient & Save Card',
     saving:'Saving...', savedOk:'Patient saved successfully',
     downloadCard:'Download Card (JPG)', printCard:'Print Card',
-    searchPlaceholder:'Search by name / file number / ID / mobile', search:'Search',
+    searchPlaceholder:'Search by name / file number / ID / mobile', search:'Search', refreshList:'Refresh List', lastUpdated:'Last updated',
     noResults:'No results', viewCard:'View Card', regDate:'Registration Date',
     filterFrom:'From', filterTo:'To', filterInsurance:'Insurance', applyFilter:'Apply Filter',
     exportExcel:'Export Excel', totalRecords:'Total Records',
@@ -266,6 +266,7 @@ const I18N = {
 const qs = new URLSearchParams(location.search);
 // عدّل هذا الرابط لاحقاً لو أعدت نشر (Deploy) نسخة Apps Script جديدة بعنوان مختلف
 const DEFAULT_API_URL = 'https://script.google.com/macros/s/AKfycbxWMGMHLYS3g07q5ANnnwa-9jheg7JFjUlG33m9uPjzpvOYKPPIXz_BUrXsZWTxj3Qk/exec';
+const SEARCH_REFRESH_MS = 3 * 60 * 1000; // تحديث تلقائي لفهرس البحث كل 3 دقائق
 // قيم احتياطية تُستخدم فقط لو تعذّر الاتصال مؤقتاً بجوجل شيت، حتى تظل الواجهة تعمل (تسجيل الدخول لا يحتاج هذه البيانات أصلاً)
 const FALLBACK_CONFIG = {
   clinicNameAr: 'مجمع المدلوح الطبي - قسم العلاج الطبيعي',
@@ -292,7 +293,10 @@ const STATE = {
   allUsers: [],
   archives: [],
   sigDrawn: false,
-  editMode: false
+  editMode: false,
+  patientsIndex: [],
+  patientsIndexTs: 0,
+  patientsIndexLoading: false
 };
 function t(){ return I18N[STATE.lang]; }
 function cfg(){ return STATE.config || FALLBACK_CONFIG; }
@@ -507,7 +511,9 @@ function renderNewPatientTab(){
 function renderSearchTab(){
   const L = t();
   let resultsHtml = '';
-  if(STATE.patients.length === 0){
+  if(STATE.patientsIndexLoading && STATE.patientsIndex.length === 0){
+    resultsHtml = `<div class="empty">${esc(L.loading)}</div>`;
+  } else if(STATE.patients.length === 0){
     resultsHtml = `<div class="empty">${esc(L.noResults)}</div>`;
   } else {
     resultsHtml = `<table><thead><tr>
@@ -523,13 +529,18 @@ function renderSearchTab(){
       </tr>`).join('')}
     </tbody></table>`;
   }
+  const lastUpdatedText = STATE.patientsIndexTs
+    ? L.lastUpdated + ': ' + new Date(STATE.patientsIndexTs).toLocaleTimeString(STATE.lang === 'ar' ? 'ar-SA' : 'en-US', {hour:'2-digit', minute:'2-digit'})
+    : '';
   return `
   <div class="card">
     <h2>${esc(L.tabSearch)}</h2>
     <div class="row" style="margin-top:12px;">
       <input type="text" id="searchInput" placeholder="${esc(L.searchPlaceholder)}" style="flex:1;min-width:220px;" value="${esc(STATE.searchQuery)}">
-      <button class="btn btn-primary" id="btnSearch">${STATE.loading ? spinner() : esc(L.search)}</button>
+      <button class="btn btn-primary" id="btnSearch">${esc(L.search)}</button>
+      <button class="btn btn-outline" id="btnRefreshIndex" title="${esc(L.refreshList)}">${STATE.patientsIndexLoading ? spinner() : '↻ ' + esc(L.refreshList)}</button>
     </div>
+    ${lastUpdatedText ? `<div class="muted" style="margin-top:8px;">${esc(lastUpdatedText)}</div>` : ''}
   </div>
   <div class="card">${resultsHtml}</div>
   ${STATE.currentPatient ? renderCurrentPatientSection() : ''}
@@ -855,6 +866,7 @@ function bindEvents(){
   // Search
   if($('btnSearch')) $('btnSearch').onclick = onSearch;
   if($('searchInput')) $('searchInput').onkeydown = (e) => { if(e.key === 'Enter') onSearch(); };
+  if($('btnRefreshIndex')) $('btnRefreshIndex').onclick = onRefreshIndex;
 
   // Reports
   if($('btnApplyFilter')) $('btnApplyFilter').onclick = onApplyReportFilter;
@@ -1013,7 +1025,11 @@ function onTabOpen(tab){
   if(!STATE.config) loadConfigSilently();
   if(tab === 'pending') loadPendingUsers();
   else if(tab === 'users') loadAllUsers();
-  else if(tab === 'search'){ STATE.patients = []; STATE.searchQuery=''; render(); }
+  else if(tab === 'search'){
+    STATE.searchQuery = '';
+    applySearchFilter(); // يعرض فورًا آخر نسخة مخزّنة (لو موجودة) بينما يحدّث في الخلفية
+    loadPatientsIndex(false);
+  }
   else if(tab === 'reports') loadReports({});
   else if(tab === 'archive') loadArchives();
   else render();
@@ -1149,16 +1165,50 @@ async function onSaveEditPatient(){
   render();
 }
 
-async function onSearch(){
+// يفلتر فورًا من الفهرس المحمّل مسبقًا في المتصفح، من غير أي نداء شبكة، فالنتيجة تظهر لحظيًا
+function applySearchFilter(){
+  const q = STATE.searchQuery.trim().toLowerCase();
+  const source = STATE.patientsIndex;
+  if(!q){
+    STATE.patients = source.slice(-50).reverse();
+  } else {
+    STATE.patients = source.filter(p =>
+      String(p.PatientName||'').toLowerCase().includes(q) ||
+      String(p.FileNumber||'').toLowerCase().includes(q) ||
+      String(p.NationalID||'').toLowerCase().includes(q) ||
+      String(p.Mobile||'').toLowerCase().includes(q) ||
+      String(p.PatientID||'').toLowerCase().includes(q)
+    ).reverse();
+  }
+  render();
+}
+
+// يحمّل/يحدّث فهرس المرضى الكامل في الخلفية. force=true يتجاوز فحص الصلاحية الزمنية (3 دقائق)
+async function loadPatientsIndex(force){
+  const stale = !STATE.patientsIndexTs || (Date.now() - STATE.patientsIndexTs > SEARCH_REFRESH_MS);
+  if(!force && !stale) return;
+  if(STATE.patientsIndexLoading) return;
+  STATE.patientsIndexLoading = true;
+  if(STATE.tab === 'search') render();
+  try{
+    const res = await api('listPatients', {}, 'GET');
+    if(res.success){
+      STATE.patientsIndex = res.patients;
+      STATE.patientsIndexTs = Date.now();
+    }
+  } catch(err){ /* تحديث صامت، تفضل البيانات المخزّنة سابقًا كما هي لو فشل */ }
+  STATE.patientsIndexLoading = false;
+  if(STATE.tab === 'search'){ applySearchFilter(); }
+}
+
+function onSearch(){
   const q = document.getElementById('searchInput').value.trim();
   STATE.searchQuery = q;
-  STATE.loading = true; clearMsg(); render();
-  try{
-    const res = await api('searchPatients', {query: q}, 'GET');
-    STATE.loading = false;
-    if(res.success) STATE.patients = res.patients; else setMsg('error', res.message);
-  } catch(err){ STATE.loading = false; setMsg('error', t().connError); }
-  render();
+  applySearchFilter();
+}
+
+function onRefreshIndex(){
+  loadPatientsIndex(true);
 }
 
 async function loadReports(filters){
@@ -1542,6 +1592,13 @@ async function onChangePassword(){
 (function init(){
   render();
   if(STATE.apiUrl) loadConfigSilently();
+
+  setInterval(() => {
+    if(!STATE.user || STATE.tab !== 'search') return;
+    const active = document.activeElement;
+    if(active && active.id === 'searchInput') return; // متسحبش من تحت إيد الموظف وهو بيكتب
+    loadPatientsIndex(true);
+  }, SEARCH_REFRESH_MS);
 })();
 </script>
 </body>
