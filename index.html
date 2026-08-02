@@ -225,6 +225,7 @@ const I18N = {
     openFile:'فتح الملف', recordCount:'عدد السجلات', archivedAt:'تاريخ الأرشفة', archivedBy:'بواسطة', dateRange:'الفترة',
     editBtn:'تعديل بيانات المريض', editPatientTitle:'تعديل بيانات المريض', saveChanges:'حفظ التعديلات', updatedOk:'تم تحديث بيانات المريض بنجاح',
     confirmManually:'تأكيد يدوي', confirmManuallyHint:'الحالة تتحول لمؤكدة تلقائيًا بعد مرور موعد الجلسة، أو تقدر تفعّل "تأكيد يدوي" لتظهر مؤكدة فورًا بغض النظر عن التاريخ.',
+    currentSignature:'التوقيع الحالي', noSignatureYet:'لا يوجد توقيع بعد', drawNewSignature:'رسم توقيع جديد (اختياري)', leaveEmptyToKeep:'سيبه فاضي لو عايز تحتفظ بالتوقيع الحالي',
     back:'رجوع', close:'إغلاق'
   },
   en: {
@@ -266,6 +267,7 @@ const I18N = {
     openFile:'Open File', recordCount:'Record Count', archivedAt:'Archived At', archivedBy:'By', dateRange:'Period',
     editBtn:'Edit Patient', editPatientTitle:'Edit Patient Data', saveChanges:'Save Changes', updatedOk:'Patient data updated successfully',
     confirmManually:'Confirm manually', confirmManuallyHint:'Status turns to confirmed automatically once the session date has passed, or you can enable "Confirm manually" to mark it confirmed right away regardless of the date.',
+    currentSignature:'Current Signature', noSignatureYet:'No signature yet', drawNewSignature:'Draw new signature (optional)', leaveEmptyToKeep:'Leave empty to keep the current signature',
     back:'Back', close:'Close'
   }
 };
@@ -755,6 +757,24 @@ function renderEditPatientForm(p){
     <p class="muted" style="margin-top:2px;">${esc(L.confirmManuallyHint)}</p>
     <div style="margin-top:10px;">${sessionsHtml}</div>
 
+    <h3 style="margin-top:20px;">${esc(L.signature)}</h3>
+    <div class="row" style="align-items:flex-start;gap:24px;flex-wrap:wrap;">
+      <div>
+        <div class="muted" style="margin-bottom:6px;">${esc(L.currentSignature)}</div>
+        <div style="border:1.5px solid var(--line);border-radius:10px;height:80px;width:220px;display:flex;align-items:center;justify-content:center;background:#fff;">
+          ${p.SignatureDataURL ? `<img src="${p.SignatureDataURL}" style="max-height:70px;max-width:200px;">` : `<span class="muted" style="font-size:12px;">${esc(L.noSignatureYet)}</span>`}
+        </div>
+      </div>
+      <div style="flex:1;min-width:220px;">
+        <div class="muted" style="margin-bottom:6px;">${esc(L.drawNewSignature)}</div>
+        <canvas id="editSigPad" class="sigpad"></canvas>
+        <div class="row" style="margin-top:8px;">
+          <button class="btn btn-outline btn-sm" id="btnClearEditSig">${esc(L.clearSig)}</button>
+          <span class="muted">${esc(L.leaveEmptyToKeep)}</span>
+        </div>
+      </div>
+    </div>
+
     <div class="field" style="margin-top:14px;"><label>${esc(L.notes)} (${esc(L.optional)})</label><textarea id="editNotes">${esc(p.Notes||'')}</textarea></div>
 
     <button class="btn btn-primary" id="btnSaveEdit" style="margin-top:18px;">${STATE.loading ? spinner() : esc(L.saveChanges)}</button>
@@ -774,7 +794,8 @@ function renderPatientCardSection(p, withEditSessions){
     if(parsed.display){
       statusHtml = sessionIsDone(raw) ? `<span class="status-done">✓</span>` : `<span class="status-pending">•</span>`;
     }
-    sessionsRows += `<tr data-has-date="${parsed.display ? '1' : '0'}"><td>${i}</td><td>${esc(parsed.display || '-')}</td><td>${statusHtml}</td></tr>`;
+    const sigCellHtml = (parsed.display && p.SignatureDataURL) ? `<img src="${p.SignatureDataURL}" style="height:24px;">` : '';
+    sessionsRows += `<tr data-has-date="${parsed.display ? '1' : '0'}"><td>${i}</td><td>${esc(parsed.display || '-')}</td><td>${sigCellHtml}</td><td>${statusHtml}</td></tr>`;
   }
 
   return `
@@ -809,7 +830,7 @@ function renderPatientCardSection(p, withEditSessions){
           <div class="it"><div class="k">${esc(L.treatment)}</div><div class="v">${esc(p.Treatment || '-')}</div></div>
         </div>
         <table>
-          <thead><tr><th>${esc(L.session)}</th><th>${esc(L.date)} / ${esc(L.time)}</th><th>${esc(L.status)}</th></tr></thead>
+          <thead><tr><th>${esc(L.session)}</th><th>${esc(L.date)} / ${esc(L.time)}</th><th>${esc(L.signature)}</th><th>${esc(L.status)}</th></tr></thead>
           <tbody>${sessionsRows}</tbody>
         </table>
         <div class="terms-box">
@@ -879,6 +900,10 @@ function bindEvents(){
   if($('btnClearSig')) $('btnClearSig').onclick = () => clearSigPad();
   initSigPad();
 
+  // Edit patient signature
+  if($('btnClearEditSig')) $('btnClearEditSig').onclick = () => clearSigPadById('editSigPad');
+  initSigPadById('editSigPad');
+
   // Search
   if($('btnSearch')) $('btnSearch').onclick = onSearch;
   if($('searchInput')) $('searchInput').onkeydown = (e) => { if(e.key === 'Enter') onSearch(); };
@@ -908,18 +933,20 @@ function bindEvents(){
 }
 
 /* ======================= SIGNATURE PAD ======================= */
-let sigCtx = null, sigDrawing = false, sigLast = null;
-function initSigPad(){
-  const canvas = document.getElementById('sigPad');
+const SIG_PADS = {}; // canvasId -> {ctx, drawing, last, drawn}
+function initSigPadById(canvasId){
+  const canvas = document.getElementById(canvasId);
   if(!canvas) return;
   const ratio = window.devicePixelRatio || 1;
   canvas.width = canvas.clientWidth * ratio;
   canvas.height = canvas.clientHeight * ratio;
-  sigCtx = canvas.getContext('2d');
-  sigCtx.scale(ratio, ratio);
-  sigCtx.strokeStyle = '#231b3a';
-  sigCtx.lineWidth = 2.2;
-  sigCtx.lineCap = 'round';
+  const ctx = canvas.getContext('2d');
+  ctx.scale(ratio, ratio);
+  ctx.strokeStyle = '#231b3a';
+  ctx.lineWidth = 2.2;
+  ctx.lineCap = 'round';
+  const state = { ctx, drawing: false, last: null, drawn: false };
+  SIG_PADS[canvasId] = state;
 
   function pos(e){
     const rect = canvas.getBoundingClientRect();
@@ -927,19 +954,19 @@ function initSigPad(){
     const cy = (e.touches ? e.touches[0].clientY : e.clientY) - rect.top;
     return {x: cx, y: cy};
   }
-  function start(e){ e.preventDefault(); sigDrawing = true; sigLast = pos(e); }
+  function start(e){ e.preventDefault(); state.drawing = true; state.last = pos(e); }
   function move(e){
-    if(!sigDrawing) return;
+    if(!state.drawing) return;
     e.preventDefault();
     const p = pos(e);
-    sigCtx.beginPath();
-    sigCtx.moveTo(sigLast.x, sigLast.y);
-    sigCtx.lineTo(p.x, p.y);
-    sigCtx.stroke();
-    sigLast = p;
-    STATE.sigDrawn = true;
+    ctx.beginPath();
+    ctx.moveTo(state.last.x, state.last.y);
+    ctx.lineTo(p.x, p.y);
+    ctx.stroke();
+    state.last = p;
+    state.drawn = true;
   }
-  function end(){ sigDrawing = false; }
+  function end(){ state.drawing = false; }
   canvas.addEventListener('mousedown', start);
   canvas.addEventListener('mousemove', move);
   window.addEventListener('mouseup', end);
@@ -947,17 +974,23 @@ function initSigPad(){
   canvas.addEventListener('touchmove', move, {passive:false});
   canvas.addEventListener('touchend', end);
 }
-function clearSigPad(){
-  const canvas = document.getElementById('sigPad');
-  if(!canvas || !sigCtx) return;
-  sigCtx.clearRect(0,0,canvas.width,canvas.height);
-  STATE.sigDrawn = false;
+function clearSigPadById(canvasId){
+  const canvas = document.getElementById(canvasId);
+  const state = SIG_PADS[canvasId];
+  if(!canvas || !state) return;
+  state.ctx.clearRect(0, 0, canvas.width, canvas.height);
+  state.drawn = false;
 }
-function getSigDataUrl(){
-  const canvas = document.getElementById('sigPad');
-  if(!canvas || !STATE.sigDrawn) return '';
+function getSigDataUrlById(canvasId){
+  const canvas = document.getElementById(canvasId);
+  const state = SIG_PADS[canvasId];
+  if(!canvas || !state || !state.drawn) return '';
   return canvas.toDataURL('image/png');
 }
+// أسماء متوافقة مع الكود القديم لفورم تسجيل مريض جديد (canvas id="sigPad")
+function initSigPad(){ initSigPadById('sigPad'); }
+function clearSigPad(){ clearSigPadById('sigPad'); }
+function getSigDataUrl(){ return getSigDataUrlById('sigPad'); }
 
 /* ======================= ACTIONS ======================= */
 function onSaveApiUrl(){
@@ -1161,6 +1194,8 @@ async function onSaveEditPatient(){
     Notes: document.getElementById('editNotes').value.trim(),
     Sessions: sessions
   };
+  const newSig = getSigDataUrlById('editSigPad');
+  if(newSig) patient.SignatureDataURL = newSig;
 
   STATE.loading = true; clearMsg(); render();
   try{
@@ -1481,24 +1516,30 @@ async function renderCardToCanvas(patient){
   }
 
   // ---- sessions table ----
-  const SESS_W = 70, STATUS_W = 110;
-  const DATE_W = (W - PAD*2) - SESS_W - STATUS_W;
+  const SESS_W = 60, STATUS_W = 90, SIG_W = 90;
+  const DATE_W = (W - PAD*2) - SESS_W - STATUS_W - SIG_W;
   // physical left-to-right order
   let colsPhys; // [{key,width}]
   if(isAr){
-    colsPhys = [{key:'status', w:STATUS_W}, {key:'date', w:DATE_W}, {key:'session', w:SESS_W}];
+    colsPhys = [{key:'status', w:STATUS_W}, {key:'signature', w:SIG_W}, {key:'date', w:DATE_W}, {key:'session', w:SESS_W}];
   } else {
-    colsPhys = [{key:'session', w:SESS_W}, {key:'date', w:DATE_W}, {key:'status', w:STATUS_W}];
+    colsPhys = [{key:'session', w:SESS_W}, {key:'date', w:DATE_W}, {key:'signature', w:SIG_W}, {key:'status', w:STATUS_W}];
   }
   const colX = [];
   { let x = PAD; for(const col of colsPhys){ colX.push(x); x += col.w; } }
+
+  // نحمّل صورة توقيع المريض مرة واحدة مقدّمًا (لو موجودة) عشان نرسمها في كل صف جلسة محجوزة
+  let patientSigImg = null;
+  if(patient.SignatureDataURL){
+    try{ patientSigImg = await loadImage(patient.SignatureDataURL); }catch(e){}
+  }
 
   // table header row
   ctx.fillStyle = COL.footBg;
   ctx.fillRect(PAD, tableTop, W - PAD*2, TABLE_HEADER_H);
   ctx.font = "700 11.5px " + FONT;
   ctx.fillStyle = COL.purpleDark;
-  const headerLabel = { session: L.session, date: L.date + ' / ' + L.time, status: L.status };
+  const headerLabel = { session: L.session, date: L.date + ' / ' + L.time, signature: L.signature, status: L.status };
   colsPhys.forEach((col, i) => {
     ctx.textAlign = 'center';
     ctx.fillText(truncateToWidth(ctx, headerLabel[col.key], col.w - 10), colX[i] + col.w/2, tableTop + 21);
@@ -1543,6 +1584,14 @@ async function renderCardToCanvas(patient){
         ctx.fillStyle = val ? COL.ink : COL.empty;
         ctx.font = "400 12px " + FONT;
         ctx.fillText(truncateToWidth(ctx, val || '-', col.w - 12), cx, textY);
+      } else if(col.key === 'signature'){
+        if(patientSigImg){
+          const maxH = 22, maxW = col.w - 14;
+          let dw = patientSigImg.width, dh = patientSigImg.height;
+          const ratio = Math.min(maxW/dw, maxH/dh);
+          dw *= ratio; dh *= ratio;
+          ctx.drawImage(patientSigImg, cx - dw/2, textY - dh + 5, dw, dh);
+        }
       } else if(col.key === 'status'){
         if(!val){
           ctx.fillStyle = COL.empty;
